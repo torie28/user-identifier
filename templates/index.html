@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Identifier - Face Recognition</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>User Face Recognition</h1>
+            <p>Train the model to recognize different users through their webcam</p>
+        </header>
+
+        <div class="main-content">
+            <div class="webcam-section">
+                <div id="webcam-container"></div>
+                <div id="label-container"></div>
+                <div class="webcam-controls">
+                    <button type="button" id="startButton" class="btn primary">Enable Webcam</button>
+                    <button type="button" id="flipButton" class="btn secondary">Flip Camera</button>
+                </div>
+                
+                <!-- Recording Controls -->
+                <div class="controls">
+                    <!-- Record button and stats will be added by JavaScript -->
+                </div>
+            </div>
+
+            <div class="training-section">
+                <h2>Train Model</h2>
+                <div class="form-group">
+                    <label for="className">Class Name (User):</label>
+                    <input type="text" id="className" placeholder="Enter user name" required>
+                </div>
+                <div class="button-group">
+                    <button type="button" id="addClassBtn" class="btn primary">Add Class</button>
+                    <button type="button" id="trainBtn" class="btn success" disabled>Train Model</button>
+                </div>
+                
+                <div id="classButtons" class="class-buttons">
+                    <!-- Class buttons will be added here -->
+                </div>
+                
+                <div class="training-controls">
+                    <button type="button" id="startTraining" class="btn primary" disabled>Start Training</button>
+                    <button type="button" id="saveModel" class="btn success" disabled>Save Model</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="prediction-section">
+            <h2>Predictions</h2>
+            <div id="predictionResults">
+                <!-- Prediction results will be displayed here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- TensorFlow.js and Models -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.2/dist/knn-classifier.min.js"></script>
+    
+    <!-- Webcam -->
+    <script src="{{ url_for('static', filename='js/webcam.js') }}"></script>
+    
+    <!-- Main Application -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
