@@ -78,7 +78,15 @@ function updateCaptureStats() {
     for (const className in trainingData) {
         stats.push(`${className}: ${trainingData[className] || 0} samples`);
     }
-    captureStats.textContent = stats.join(' | ') || 'No samples captured yet';
+    
+    let statusText = stats.join(' | ') || 'No samples captured yet';
+    
+    // Add prediction status
+    if (isPredicting) {
+        statusText += ' | 🔍 Predicting...';
+    }
+    
+    captureStats.textContent = statusText;
 }
 
 // Set up event listeners
@@ -138,16 +146,29 @@ function startRecording(e) {
         }
         
         if (trainingData[currentClass] < MAX_SAMPLES_PER_CLASS) {
-            // Here you would typically add the frame to your training data
-            // For now, we'll just count the samples
-            trainingData[currentClass]++;
-            updateCaptureStats();
-            
-            // Optional: Show a visual indicator for each capture
-            const indicator = document.createElement('div');
-            indicator.className = 'capture-indicator';
-            document.body.appendChild(indicator);
-            setTimeout(() => indicator.remove(), 100);
+            try {
+                // Get the activation from MobileNet
+                const activation = net.infer(frame, true);
+                
+                // Add the example to the classifier
+                classifier.addExample(activation, currentClass);
+                
+                // Update the count
+                trainingData[currentClass]++;
+                updateCaptureStats();
+                
+                // Show visual indicator for each capture
+                const indicator = document.createElement('div');
+                indicator.className = 'capture-indicator';
+                indicator.style.left = Math.random() * window.innerWidth + 'px';
+                indicator.style.top = Math.random() * window.innerHeight + 'px';
+                document.body.appendChild(indicator);
+                setTimeout(() => indicator.remove(), 500);
+                
+                console.log(`Added training example for ${currentClass}. Total: ${trainingData[currentClass]}`);
+            } catch (error) {
+                console.error('Error adding training example:', error);
+            }
         } else {
             showMessage(`Maximum samples (${MAX_SAMPLES_PER_CLASS}) reached for ${currentClass}`, 'warning');
             stopRecording();
@@ -163,6 +184,12 @@ function stopRecording() {
     recordButton.textContent = 'Hold to Record';
     recordButton.classList.remove('recording');
     updateCaptureStats();
+    
+    // Auto-start predictions if we have training data for multiple classes
+    const trainedClasses = Object.keys(trainingData).filter(className => trainingData[className] > 0);
+    if (trainedClasses.length >= 2 && !isPredicting) {
+        startPredicting();
+    }
 }
 
 // Toggle webcam on/off
@@ -267,6 +294,11 @@ function setCurrentClass(className) {
             btn.classList.remove('active');
         }
     });
+    
+    // Enable record button if webcam is active
+    if (webcam && webcam.isStreaming()) {
+        recordButton.disabled = false;
+    }
 }
 
 // Delete a class
@@ -371,14 +403,14 @@ async function togglePrediction() {
     
     // Start the prediction loop
     while (isPredicting) {
-        await predict();
-        await tf.nextFrame(); // Allow the browser to update the UI
-    }
 }
 
 // Make a prediction using the trained model
 async function predict() {
-    if (!webcam || !isPredicting) return;
+    if (!webcam || !classifier || classifier.getNumClasses() === 0) {
+        showMessage('Please train the model first', 'warning');
+        return;
+    }
     
     try {
         // Get the current frame from the webcam
@@ -404,6 +436,11 @@ async function predict() {
         // Dispose the tensor to avoid memory leaks
         img.dispose();
         activation.dispose();
+        
+        // Continue predicting if still in prediction mode
+        if (isPredicting) {
+            setTimeout(predict, 200); // Predict every 200ms
+        }
     } catch (error) {
         console.error('Error making prediction:', error);
         showMessage('Error making prediction. Please try again.', 'error');
@@ -496,5 +533,5 @@ function showMessage(message, type = 'info') {
             messageContainer.remove();
         }
     }, 3000);
+  }
 }
-
