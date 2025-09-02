@@ -1,12 +1,17 @@
 // Global variables
 let net;
 let webcam;
+let trainingWebcam;
+let predictionWebcam;
 let classifier = knnClassifier.create();
 let classes = [];
 let isTraining = false;
 let isPredicting = false;
 let currentClass = null;
 let flipCamera = false;
+let trainingMode = false;
+let predictionMode = false;
+let autoCollectionActive = false;
 
 // DOM Elements
 const startButton = document.getElementById('startButton');
@@ -22,6 +27,8 @@ const labelContainer = document.getElementById('label-container');
 const predictionResults = document.getElementById('predictionResults');
 const recordButton = document.createElement('button');
 const captureStats = document.createElement('div');
+const trainingWebcamContainer = document.getElementById('training-webcam-container');
+const stopTrainingModeBtn = document.getElementById('stopTrainingMode');
 
 // Training data storage
 let trainingData = {};
@@ -89,6 +96,108 @@ function updateCaptureStats() {
     captureStats.textContent = statusText;
 }
 
+// Start training mode with separate webcam
+async function startTrainingMode() {
+    if (classes.length < 1) {
+        alert('Please add at least one class first');
+        return;
+    }
+    
+    try {
+        trainingMode = true;
+        
+        // Show the training webcam container
+        trainingWebcamContainer.style.display = 'block';
+        
+        // Create training webcam
+        const trainingWebcamElement = document.getElementById('training-webcam');
+        trainingWebcam = new Webcam(trainingWebcamElement, 'user');
+        await trainingWebcam.setup();
+        
+        // Start automatic training for all classes
+        startAutomaticTraining();
+        
+        // Start predictions on main webcam if it exists
+        if (webcam && webcam.isStreaming()) {
+            startPredicting();
+        }
+        
+        showMessage('Training mode started! The system will automatically collect training data.', 'success');
+        
+    } catch (error) {
+        console.error('Error starting training mode:', error);
+        showMessage('Error starting training mode: ' + error.message, 'error');
+    }
+}
+
+// Stop training mode
+async function stopTrainingMode() {
+    trainingMode = false;
+    
+    // Hide training webcam
+    trainingWebcamContainer.style.display = 'none';
+    
+    // Stop training webcam
+    if (trainingWebcam) {
+        await trainingWebcam.stop();
+        trainingWebcam = null;
+    }
+    
+    // Stop automatic training
+    isTraining = false;
+    
+    showMessage('Training mode stopped', 'info');
+}
+
+// Automatic training for all classes
+async function startAutomaticTraining() {
+    if (!trainingWebcam || !trainingMode) return;
+    
+    isTraining = true;
+    let classIndex = 0;
+    
+    const trainNextClass = async () => {
+        if (!trainingMode || !isTraining) return;
+        
+        const className = classes[classIndex];
+        if (!className) return;
+        
+        // Set current class
+        setCurrentClass(className);
+        
+        // Collect samples for this class
+        for (let i = 0; i < 20 && trainingMode; i++) {
+            try {
+                const img = await trainingWebcam.capture();
+                const activation = net.infer(img, true);
+                classifier.addExample(activation, className);
+                
+                if (!trainingData[className]) trainingData[className] = 0;
+                trainingData[className]++;
+                updateCaptureStats();
+                
+                img.dispose();
+                activation.dispose();
+                
+                // Wait between captures
+                await new Promise(resolve => setTimeout(resolve, 200));
+            } catch (error) {
+                console.error('Error during automatic training:', error);
+            }
+        }
+        
+        // Move to next class
+        classIndex = (classIndex + 1) % classes.length;
+        
+        // Continue training
+        if (trainingMode) {
+            setTimeout(trainNextClass, 1000);
+        }
+    };
+    
+    trainNextClass();
+}
+
 // Set up event listeners
 function setupEventListeners() {
     // Start/Stop Webcam
@@ -117,7 +226,12 @@ function setupEventListeners() {
     trainBtn.addEventListener('click', trainModel);
     
     // Start Training
-    startTrainingBtn.addEventListener('click', startTraining);
+    startTrainingBtn.addEventListener('click', startTrainingMode);
+    
+    // Stop Training Mode
+    if (stopTrainingModeBtn) {
+        stopTrainingModeBtn.addEventListener('click', stopTrainingMode);
+    }
     
     // Save Model
     saveModelBtn.addEventListener('click', saveModel);
@@ -242,6 +356,9 @@ function addNewClass() {
     // Add the class to our list
     classes.push(className);
     
+    // Initialize training data for this class
+    trainingData[className] = 0;
+    
     // Create a button for this class
     const button = document.createElement('button');
     button.className = 'class-button';
@@ -265,8 +382,8 @@ function addNewClass() {
     // Clear the input
     classNameInput.value = '';
     
-    // Enable the train button if we have at least 2 classes
-    if (classes.length >= 2) {
+    // Enable the train button if we have at least 1 class
+    if (classes.length >= 1) {
         trainBtn.disabled = false;
     }
     
@@ -274,6 +391,13 @@ function addNewClass() {
     if (classes.length === 1) {
         setCurrentClass(className);
     }
+    
+    // Automatically start collecting samples for this class if webcam is active
+    if (webcam && webcam.isStreaming()) {
+        autoCollectSamples(className);
+    }
+    
+    updateCaptureStats();
 }
 
 // Set the current class for adding training examples
@@ -326,7 +450,11 @@ function deleteClass(className) {
     }
     
     // Update the train button state
-    trainBtn.disabled = classes.length < 2;
+    trainBtn.disabled = classes.length < 1;
+    
+    // Remove from training data
+    delete trainingData[className];
+    updateCaptureStats();
 }
 
 // Start the training process
@@ -355,40 +483,44 @@ function startTraining() {
     trainModel();
 }
 
-// Train the model with the current class
+// Train the model - now starts prediction webcam
 async function trainModel() {
-    if (!webcam || !currentClass) return;
+    if (classes.length < 1) {
+        alert('Please add at least one class first');
+        return;
+    }
     
     try {
-        // Get the current frame from the webcam
-        const img = await webcam.capture();
-        
-        // Get the intermediate activation of MobileNet 'conv_preds'
-        const activation = net.infer(img, 'conv_preds');
-        
-        // Add the activation to the classifier
-        classifier.addExample(activation, currentClass);
-        
-        // Dispose the tensor to avoid memory leaks
-        img.dispose();
-        
-        // Show a success message
-        showMessage(`Added example for class: ${currentClass}`, 'success');
-        
-        // If we're in training mode, continue training
-        if (isTraining) {
-            setTimeout(trainModel, 500);
-        }
+        // Start prediction webcam mode
+        await startPredictionWebcam();
+        showMessage('Training complete! Prediction webcam started.', 'success');
     } catch (error) {
-        console.error('Error training model:', error);
-        showMessage('Error training model. Please try again.', 'error');
+        console.error('Error starting prediction mode:', error);
+        showMessage('Error starting prediction mode: ' + error.message, 'error');
     }
+}
+
+// Start continuous predictions
+function startPredicting() {
+    if (!webcam || !classifier || classifier.getNumClasses() === 0) {
+        return;
+    }
+    
+    isPredicting = true;
+    updateCaptureStats();
+    predict();
+}
+
+// Stop continuous predictions
+function stopPredicting() {
+    isPredicting = false;
+    updateCaptureStats();
 }
 
 // Start/Stop prediction
 async function togglePrediction() {
     if (isPredicting) {
-        isPredicting = false;
+        stopPredicting();
         predictButton.textContent = 'Start Prediction';
         return;
     }
@@ -398,11 +530,8 @@ async function togglePrediction() {
         return;
     }
     
-    isPredicting = true;
+    startPredicting();
     predictButton.textContent = 'Stop Prediction';
-    
-    // Start the prediction loop
-    while (isPredicting) {
 }
 
 // Make a prediction using the trained model
@@ -451,6 +580,17 @@ async function predict() {
 function displayPredictions(predictions) {
     // Clear previous predictions
     predictionResults.innerHTML = '';
+    
+    // Show the top prediction prominently
+    if (predictions.length > 0) {
+        const topPrediction = predictions[0];
+        if (topPrediction.probability > 0.7) { // Only show if confidence is high
+            const currentPredictionElement = document.createElement('div');
+            currentPredictionElement.className = 'current-prediction';
+            currentPredictionElement.textContent = `Identified: ${topPrediction.className} (${Math.round(topPrediction.probability * 100)}%)`;
+            predictionResults.appendChild(currentPredictionElement);
+        }
+    }
     
     // Add each prediction to the UI
     predictions.forEach(prediction => {
@@ -534,4 +674,205 @@ function showMessage(message, type = 'info') {
         }
     }, 3000);
   }
+
+// Automatically collect samples for a class
+async function autoCollectSamples(className, sampleCount = 30) {
+    if (!webcam || !webcam.isStreaming() || autoCollectionActive) {
+        return;
+    }
+    
+    autoCollectionActive = true;
+    showMessage(`Auto-collecting ${sampleCount} samples for ${className}...`, 'info');
+    
+    for (let i = 0; i < sampleCount && autoCollectionActive; i++) {
+        try {
+            const img = await webcam.capture();
+            const activation = net.infer(img, true);
+            classifier.addExample(activation, className);
+            
+            trainingData[className]++;
+            updateCaptureStats();
+            
+            img.dispose();
+            activation.dispose();
+            
+            // Wait between captures
+            await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (error) {
+            console.error('Error during auto sample collection:', error);
+            break;
+        }
+    }
+    
+    autoCollectionActive = false;
+    showMessage(`Collected ${trainingData[className]} samples for ${className}`, 'success');
 }
+
+// Start prediction webcam mode
+async function startPredictionWebcam() {
+    if (predictionMode) {
+        return;
+    }
+    
+    try {
+        predictionMode = true;
+        
+        // Create prediction webcam container if it doesn't exist
+        let predictionContainer = document.getElementById('prediction-webcam-container');
+        if (!predictionContainer) {
+            predictionContainer = document.createElement('div');
+            predictionContainer.id = 'prediction-webcam-container';
+            predictionContainer.innerHTML = `
+                <div class="prediction-webcam-header">
+                    <h3>Live Prediction</h3>
+                    <button id="closePredictionWebcam" class="btn secondary">Close</button>
+                </div>
+                <div id="prediction-webcam"></div>
+                <div id="live-prediction-results"></div>
+            `;
+            predictionContainer.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                width: 320px;
+                background: white;
+                border: 2px solid #007bff;
+                border-radius: 10px;
+                padding: 15px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                z-index: 1000;
+            `;
+            document.body.appendChild(predictionContainer);
+            
+            // Add close button event
+            document.getElementById('closePredictionWebcam').addEventListener('click', stopPredictionWebcam);
+        }
+        
+        predictionContainer.style.display = 'block';
+        
+        // Create prediction webcam
+        const predictionWebcamElement = document.getElementById('prediction-webcam');
+        predictionWebcam = new Webcam(predictionWebcamElement, 'user');
+        await predictionWebcam.setup();
+        
+        // Style the prediction webcam video
+        const video = predictionWebcamElement.querySelector('video');
+        if (video) {
+            video.style.cssText = `
+                width: 100%;
+                height: 200px;
+                object-fit: cover;
+                border-radius: 5px;
+            `;
+        }
+        
+        // Start live predictions
+        startLivePredictions();
+        
+    } catch (error) {
+        console.error('Error starting prediction webcam:', error);
+        throw error;
+    }
+}
+
+// Stop prediction webcam mode
+async function stopPredictionWebcam() {
+    predictionMode = false;
+    isPredicting = false;
+    
+    // Stop prediction webcam
+    if (predictionWebcam) {
+        await predictionWebcam.stop();
+        predictionWebcam = null;
+    }
+    
+    // Hide prediction container
+    const predictionContainer = document.getElementById('prediction-webcam-container');
+    if (predictionContainer) {
+        predictionContainer.style.display = 'none';
+    }
+    
+    showMessage('Prediction webcam stopped', 'info');
+}
+
+// Start live predictions on the prediction webcam
+function startLivePredictions() {
+    if (!predictionWebcam || !classifier || classifier.getNumClasses() === 0) {
+        return;
+    }
+    
+    isPredicting = true;
+    makeLivePrediction();
+}
+
+// Make live predictions
+async function makeLivePrediction() {
+    if (!predictionWebcam || !predictionMode || !isPredicting) {
+        return;
+    }
+    
+    try {
+        const img = await predictionWebcam.capture();
+        const activation = net.infer(img, true);
+        const result = await classifier.predictClass(activation);
+        
+        // Display live prediction results
+        displayLivePredictions(result);
+        
+        img.dispose();
+        activation.dispose();
+        
+        // Continue predicting
+        if (isPredicting && predictionMode) {
+            setTimeout(makeLivePrediction, 200);
+        }
+    } catch (error) {
+        console.error('Error making live prediction:', error);
+        if (isPredicting && predictionMode) {
+            setTimeout(makeLivePrediction, 500); // Retry after longer delay
+        }
+    }
+}
+
+// Display live prediction results
+function displayLivePredictions(result) {
+    const liveResults = document.getElementById('live-prediction-results');
+    if (!liveResults) return;
+    
+    const predictions = Object.entries(result.confidences)
+        .map(([className, confidence]) => ({ className, confidence }))
+        .sort((a, b) => b.confidence - a.confidence);
+    
+    const topPrediction = predictions[0];
+    
+    if (topPrediction && topPrediction.confidence > 0.6) {
+        liveResults.innerHTML = `
+            <div style="
+                background: #28a745;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                text-align: center;
+                margin-top: 10px;
+                font-weight: bold;
+            ">
+                Detected: ${topPrediction.className}<br>
+                Confidence: ${Math.round(topPrediction.confidence * 100)}%
+            </div>
+        `;
+    } else {
+        liveResults.innerHTML = `
+            <div style="
+                background: #6c757d;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                text-align: center;
+                margin-top: 10px;
+            ">
+                No clear detection
+            </div>
+        `;
+    }
+}
+
