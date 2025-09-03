@@ -299,11 +299,7 @@ function stopRecording() {
     recordButton.classList.remove('recording');
     updateCaptureStats();
     
-    // Auto-start predictions if we have training data for multiple classes
-    const trainedClasses = Object.keys(trainingData).filter(className => trainingData[className] > 0);
-    if (trainedClasses.length >= 2 && !isPredicting) {
-        startPredicting();
-    }
+    // Remove auto-start predictions - user should manually start predictions via Train Model button
 }
 
 // Toggle webcam on/off
